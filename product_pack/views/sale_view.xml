@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<openerp>
+<odoo>
     <data>
 
     <!-- sale order line pack line -->
@@ -56,12 +56,13 @@
         <field name="inherit_id" ref="sale.view_order_form"/>
         <field name="arch" type="xml">
             <!-- button to open line form -->
-            <xpath expr="//field[@name='order_line']/tree//field[@name='price_subtotal']" position="after">
+            <xpath expr="//tree//field[@name='price_subtotal']" position="after">
                 <field name="pack_type" invisible="1"/>
-                <button name="action_pack_detail" string="Detail" attrs="{'invisible':[('pack_type', '!=', 'none_detailed_assited_price')]}" type="object"/>
-            </xpath> 
+                <field name="pack_total_price" readonly="1"/>
+                <button name="action_pack_detail" string="Detail" attrs="{'invisible':[('pack_type', '!=', 'none_detailed_assited_price')]}" icon="fa-folder" type="object"/>
+            </xpath>
         </field>
     </record>
 
     </data>
-</openerp>
+</odoo>

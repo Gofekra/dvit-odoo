@@ -3,9 +3,9 @@
 # For copyright and license notices, see __openerp__.py file in root directory
 ##############################################################################
 from odoo import fields, models, api, _
-# from odoo.osv import fields as old_fields
 from odoo.exceptions import Warning
 import math
+
 
 class product_product(models.Model):
     _inherit = 'product.product'
@@ -22,71 +22,6 @@ class product_product(models.Model):
         'On Packs',
         help='List of packs where product is used.'
         )
-
-    # @api.multi
-    # def _product_available(self, field_names=None, arg=False):
-    #     """
-    #     For product packs we get availability in a different way
-    #     """
-    #     ids = self.ids
-    #     pack_product_ids = self.search( [
-    #         ('pack', '=', True),
-    #         ('id', 'in', ids),
-    #     ])
-    #     res = super(product_product, self)._product_available(
-    #         field_names, arg)
-    #     for product in self.browse( pack_product_ids):
-    #         pack_qty_available = []
-    #         pack_virtual_available = []
-    #         for subproduct in product.pack_line_ids:
-    #             subproduct_stock = self._product_available(
-    #                 field_names, arg)[subproduct.product_id.id]
-    #             sub_qty = subproduct.quantity
-    #             if sub_qty:
-    #                 pack_qty_available.append(math.floor(
-    #                     subproduct_stock['qty_available'] / sub_qty))
-    #                 pack_virtual_available.append(math.floor(
-    #                     subproduct_stock['virtual_available'] / sub_qty))
-    #         # TODO calcular correctamente pack virtual available para negativos
-    #         res[product.id] = {
-    #             'qty_available': (
-    #                 pack_qty_available and min(pack_qty_available) or False),
-    #             'incoming_qty': 0,
-    #             'outgoing_qty': 0,
-    #             'virtual_available': (
-    #                 pack_virtual_available and
-    #                 max(min(pack_virtual_available), 0) or False),
-    #         }
-    #     return res
-
-    # def _search_product_quantity(self, name, domain):
-    #     """
-    #     We use original search function
-    #     """
-    #     return super(product_product, self)._search_product_quantity(
-    #          name, domain)
-
-    # # overwrite ot this fields so that we can modify _product_available
-    # # function to support packs
-    # # _columns = {
-    # #     'qty_available': old_fields.function(
-    # #         _product_available, multi='qty_available',
-    # #         fnct_search=_search_product_quantity),
-    # #     'virtual_available': old_fields.function(
-    # #         _product_available, multi='qty_available',
-    # #         fnct_search=_search_product_quantity),
-    # #     'incoming_qty': old_fields.function(
-    # #         _product_available, multi='qty_available',
-    # #         fnct_search=_search_product_quantity),
-    # #     'outgoing_qty': old_fields.function(
-    # #         _product_available, multi='qty_available',
-    # #         fnct_search=_search_product_quantity),
-    # # }
-    # #
-    # qty_available = fields.Float(string="qty_available" )
-    # virtual_available = fields.Float(string="virtual_available" )
-    # incoming_qty = fields.Float(string="incoming_qty" )
-    # outgoing_qty = fields.Float(string="outgoing_qty" )
 
     @api.one
     @api.constrains('pack_line_ids')
@@ -121,6 +56,7 @@ class product_template(models.Model):
         "lines prices on pack (don't show component prices).\n"
         "* Detailed - Fixed Price: Detail lines on sales order and use product"
         " pack price (ignore line prices).\n"
+        "* None Detailed - Totaliced Price: Do not detail lines on sales order.\n"
         "* None Detailed - Assisted Price: Do not detail lines on sales "
         "order. Assist to get pack price using pack lines."
         )
@@ -193,18 +129,12 @@ class product_template(models.Model):
                 {'pack_line_ids': vals.pop('pack_line_ids')})
 
         for prod in self:
-            # set type to service if it's a pack
+        # set type to service if it's a pack
             if not 'pack' in vals:
                 vals['pack'] = prod.pack
-            if 'pack' in vals and vals['pack'] == True:
+            if vals['pack'] == True:
                 vals['type'] = 'service'
         return super(product_template, self).write(vals)
-
-    @api.model
-    def create(self,vals):
-        if vals['pack'] == True:
-            vals['type'] = 'service'
-        return super(product_template, self).create(vals)
 
     @api.model
     def _price_get(self, products, ptype='list_price'):
@@ -226,3 +156,27 @@ class product_template(models.Model):
                     pack_price += (product_line_price * pack_line.quantity)
                 res[product.id] = pack_price
         return res
+
+    @api.onchange('pack_line_ids','pack_price_type','type','pack','list_price')
+    def set_pack_price(self):
+        # This should work only in case of totalice or assited packs
+        for prod in self:
+            for pline in prod.pack_line_ids.filtered(lambda l: l.product_id.pack):
+                pline.product_id.product_tmpl_id.set_pack_price()
+            if prod.pack and prod.pack_price_type in [
+                'totalice_price',
+                'none_detailed_totaliced_price',
+                'none_detailed_assited_price']:
+                prod.list_price = sum(l.product_id.list_price * l.quantity for l in prod.pack_line_ids)
+
+            if prod.pack and prod.type != 'service':
+                prod.type = 'service'
+
+    @api.constrains('list_price')
+    def set_parent_pack_price(self):
+        for prod in self:
+            if not prod.pack: # if it's a pack > generates recursion
+                for pack in prod.used_pack_line_ids:
+                    pack.parent_product_id.product_tmpl_id.set_pack_price()
+            #TODO: update parent pack product if exist - generates recursion error
+            # working from Sale order line now

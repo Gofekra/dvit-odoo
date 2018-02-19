@@ -3,6 +3,9 @@
 # For copyright and license notices, see __openerp__.py file in root directory
 ##############################################################################
 from odoo import fields, models, api, _
+from odoo.exceptions import UserError
+from odoo.tools import  float_compare
+
 
 
 class sale_order_line(models.Model):
@@ -12,6 +15,9 @@ class sale_order_line(models.Model):
     pack_total = fields.Float(
         string='Pack total',
         compute='_get_pack_total'
+        )
+    pack_total_price = fields.Float(
+        string='Pack Unit Price',
         )
     pack_line_ids = fields.One2many(
         'sale.order.line.pack.line',
@@ -99,13 +105,18 @@ class sale_order_line(models.Model):
     @api.one
     @api.onchange('pack_total')
     def _onchange_pack_line_ids(self):
+
         self.price_unit = self.pack_total
 
     @api.constrains('product_id')
     def expand_none_detailed_pack(self):
-        if self.product_id.pack_price_type == 'none_detailed_assited_price':
+        if self.product_id.pack_price_type in [
+            'totalice_price',
+            'none_detailed_totaliced_price',
+            'none_detailed_assited_price']:
             # remove previus existing lines
             self.pack_line_ids.unlink()
+
 
             # create a sale pack line for each product pack line
             for pack_line in self.product_id.pack_line_ids:
@@ -120,3 +131,51 @@ class sale_order_line(models.Model):
                     'price_subtotal': price_unit * quantity,
                     }
                 self.pack_line_ids.create(vals)
+
+    # @api.multi
+    # def get_sale_order_line_price(self, pack_line):
+    #     self.ensure_one()
+    #     # if self.product_id.pack_price_type == 'totalice_price':
+    #     for subline in pack_line.product_id.pack_line_ids:
+    #         price += self.get_sale_order_line_price(subline)
+    #
+    #     price = 0.0
+    #     subproduct = pack_line.product_id
+    #     order = self.order_id
+    #     qty = pack_line.quantity * self.product_uom_qty
+    #     pricelist = order.pricelist_id.id
+    #     price = self.env['product.pricelist'].price_get(subproduct.id, quantity, order.partner_id.id)[pricelist]
+    #
+    #     return price
+
+    @api.constrains('product_id')
+    def totalice_price(self):
+        if self.product_id.pack_price_type in [
+            'totalice_price',
+            'none_detailed_totaliced_price',
+            'none_detailed_assited_price']:
+
+            order = self.order_id
+            pricelist = order.pricelist_id.id
+            self.product_id.product_tmpl_id.set_pack_price()
+
+            self.pack_total_price = self.env['product.pricelist'].price_get(
+                self.product_id.id, self.product_uom_qty,
+                self.order_id.partner_id.id)[pricelist]
+
+    def remove_line_price_from_root_pack(self, amount, qty):
+        for line in self:
+            if line.pack_parent_line_id:
+                line.pack_parent_line_id.remove_line_price_from_root_pack(amount,qty)
+            if not line.pack_parent_line_id and line.product_id.pack_price_type == 'totalice_price':
+                line.price_unit -= (qty * amount) / line.product_uom_qty
+                line.total_line -= qty * amount
+                line.price_subtotal -= qty * amount * ( 1 - (line.discount / 100))
+
+    @api.multi
+    def unlink(self):
+        for line in self:
+            if line.filtered(lambda x: x.state in ('sale', 'done')):
+                raise UserError(_('You can not remove a sale order line.\n\Discard changes and try setting the quantity to 0.'))
+            line.pack_parent_line_id and line.pack_parent_line_id.remove_line_price_from_root_pack(line.pack_total_price, line.product_uom_qty)
+        return super(sale_order_line, self).unlink()
